@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 const fetcher = (url) => fetch(url).then((r) => r.json());
 
 export default function Home() {
-	const [target, setTarget] = useState("192.168.1.0/24");
+	const [target, setTarget] = useState("192.168.4.0/22");
 	const [profile] = useState("stealth"); // locked to stealth by default
 	const [auto, setAuto] = useState(true);
 
@@ -54,7 +54,7 @@ export default function Home() {
 					<input
 						value={target}
 						onChange={(e) => setTarget(e.target.value)}
-						placeholder="192.168.1.0/24"
+						placeholder="192.168.4.0/22"
 					/>
 				</label>
 				<label>
