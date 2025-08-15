@@ -16,7 +16,7 @@ const isRfc1918 = (target) =>
 	RFC1918.some((rx) => rx.test(target.split("/")[0]));
 
 const Query = z.object({
-	target: z.string().default("192.168.1.0/24"),
+	target: z.string().default("192.168.4.0/22"),
 	profile: z.enum(["stealth", "fast", "deep"]).default("stealth"),
 });
 
