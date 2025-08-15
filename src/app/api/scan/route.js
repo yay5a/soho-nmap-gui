@@ -48,10 +48,13 @@ function parseHostsFromXml(xml) {
 }
 
 export async function GET(req) {
+	const startTime = Date.now();
 	try {
 		const { searchParams } = new URL(req.url);
 		const q = Query.parse(Object.fromEntries(searchParams));
 		const profile = scanProfiles[q.profile] ?? scanProfiles.stealth;
+
+		console.log("Scan requested", { target: q.target, profile: q.profile });
 
 		if (!isRfc1918(q.target)) {
 			return Response.json(
@@ -60,6 +63,12 @@ export async function GET(req) {
 			);
 		}
 
+		if (discovered.length === 0) {
+			return Response.json(
+				{ hosts: [] },
+				{ headers: { "Cache-Control": "no-store" } },
+			);
+		}
 		const discoveryArgs = [
 			"-oX",
 			"-",
@@ -70,40 +79,53 @@ export async function GET(req) {
 			q.target,
 		];
 		const discoveryXml = await runNmap(discoveryArgs);
-		const discovered = parseHostsFromXml(discoveryXml)
+		const discoveryHosts = parseHostsFromXml(discoveryXml);
+		const upHosts = discoveryHosts
 			.filter((h) => h.status === "up")
 			.map((h) => h.addr);
+		console.log(
+			`Discovery found ${discoveryHosts.length} hosts (${upHosts.length} up)`,
+		);
 
-		if (discovered.length === 0) {
-			return Response.json(
-				{ hosts: [] },
-				{ headers: { "Cache-Control": "no-store" } },
-			);
+		let portHosts = [];
+		if (upHosts.length > 0) {
+			const portArgs = [
+				"-oX",
+				"-",
+				"-Pn",
+				...profile.ports,
+				"--max-retries",
+				"1",
+				"--host-timeout",
+				"30s",
+				...upHosts,
+			];
+			console.log(`Running port scan on ${upHosts.length} hosts`);
+			const portsXml = await runNmap(portArgs);
+			portHosts = parseHostsFromXml(portsXml).map((h) => ({
+				...h,
+				ports: h.ports.filter((p) => p.state === "open"),
+			}));
 		}
 
-		const portArgs = [
-			"-oX",
-			"-",
-			"-Pn",
-			...profile.ports,
-			"--max-retries",
-			"1",
-			"--host-timeout",
-			"30s",
-			...discovered,
-		];
-		const portsXml = await runNmap(portArgs);
-		const hosts = parseHostsFromXml(portsXml).map((h) => ({
+		const portMap = new Map(portHosts.map((h) => [h.addr, h]));
+		const hosts = discoveryHosts.map((h) => ({
 			...h,
-			ports: h.ports.filter((p) => p.state === "open"),
+			ports: portMap.get(h.addr)?.ports || [],
 		}));
 
+		const duration = Date.now() - startTime;
+		console.log("Scan finished", {
+			durationMs: duration,
+			totalHosts: hosts.length,
+		});
+
 		return Response.json(
-			{ hosts },
+			{ hosts, duration },
 			{ headers: { "Cache-control": "no-store" } },
 		);
 	} catch (e) {
-		console.error(e);
+		console.error("Scan failed", e);
 		return Response.json(
 			{ error: "Scan failed", detail: String(e?.message || e) },
 			{ status: 500 },

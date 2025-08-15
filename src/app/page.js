@@ -22,6 +22,17 @@ export default function Home() {
 
 	const hosts = data?.hosts || [];
 
+	function exportJson() {
+		const blob = new Blob([JSON.stringify(hosts, null, 2)], {
+			type: "application/json",
+		});
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = "scan-results.json";
+		a.click();
+		URL.revokeObjectURL(url);
+	}
 	return (
 		<main style={{ padding: 24, fontFamily: "ui-sans-serif, system-ui" }}>
 			<h1 style={{ fontSize: 28, marginBottom: 12 }}>
@@ -57,11 +68,25 @@ export default function Home() {
 				<button type="submit">Run</button>
 			</form>
 
-			{isLoading && <p>Scanning… (quiet mode)</p>}
+			{isLoading && (
+				<div style={{ marginBottom: 12 }}>
+					<p>Scanning…</p>
+					<progress />
+				</div>
+			)}
 			{error && (
 				<p style={{ color: "crimson" }}>
 					Error: {error.message || "API error"}
 				</p>
+			)}
+
+			{data && (
+				<div style={{ marginBottom: 12 }}>
+					<p>Scan duration: {(data.duration / 1000).toFixed(1)}s</p>
+					<button onClick={exportJson} disabled={hosts.length === 0}>
+						Export JSON
+					</button>
+				</div>
 			)}
 
 			<table
@@ -72,6 +97,7 @@ export default function Home() {
 				<thead>
 					<tr>
 						<th>Host</th>
+						<th>Status</th>
 						<th>Open Ports</th>
 						<th>Services</th>
 					</tr>
@@ -80,6 +106,15 @@ export default function Home() {
 					{hosts.map((h) => (
 						<tr key={h.addr}>
 							<td>{h.addr}</td>
+							<td>
+								<span
+									style={{
+										color: h.status === "up" ? "green" : "red",
+									}}
+								>
+									● {h.status}
+								</span>
+							</td>
 							<td>{h.ports.map((p) => p.portid).join(", ") || "—"}</td>
 							<td>
 								{h.ports
