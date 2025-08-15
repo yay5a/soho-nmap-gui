@@ -1,6 +1,5 @@
 "use client";
 
-"use client";
 import useSWR from "swr";
 import { useMemo, useState } from "react";
 
