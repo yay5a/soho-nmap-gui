@@ -135,8 +135,13 @@ export async function GET(req) {
 			15_000,
 			Math.min(REQ_BUDGET_MS - 5_000, Math.floor(hostCount * 120)),
 		);
-		const discoveryArgs = ["-oX", "-", "-sn", "-T3", "-n", target];
-
+		const discoveryArgs = [
+			"-oX",
+			"-",
+			"-n", // always skip DNS
+			...(profile.discovery || ["-sn", "-T3"]),
+			target,
+		];
 		const discoveryXml = await runNmap(discoveryArgs, discoveryTimeoutMs);
 		const discoveryHosts = parseHostsFromXml(discoveryXml);
 		const upHosts = discoveryHosts
