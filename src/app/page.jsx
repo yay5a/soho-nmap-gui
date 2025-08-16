@@ -4,18 +4,18 @@ import { useMemo, useState, useCallback } from "react";
 import useSWR from "swr";
 
 // robust fetcher: parse JSON when available, otherwise show server text
-const fetcher = async (url) => {
-	const res = await fetch(url, { headers: { "cache-control": "no-store" } });
+const fetcher = async (key) => {
+	const res = await fetch(key);
+	const ct = res.headers.get("content-type") || "";
 	const text = await res.text();
-	let data = null;
-	try {
-		data = JSON.parse(text);
-	} catch {
-		// non-JSON (e.g. Next error HTML) — surface the raw text
-		throw new Error(text || res.statusText);
+	if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+
+	if (ct.includes("application/json")) return JSON.parse(text);
+	if (ct.includes("xml")) {
+		// Browser-side: get an XMLDocument
+		return new window.DOMParser().parseFromString(text, "application/xml");
 	}
-	if (!res.ok) throw new Error(data?.error || data?.detail || res.statusText);
-	return data;
+	return text; // fallback
 };
 
 export default function Page() {
