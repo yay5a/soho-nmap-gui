@@ -24,14 +24,14 @@ async function runNmap(args, timeoutMs = 120_000) {
 		// configured signal (SIGINT above). Nmap handles SIGINT by writing any
 		// results gathered so far before exiting, so attempt to parse the partial
 		// stdout instead of treating this as a fatal error.
-		if (err?.killed && err?.stdout) {
+		if (err?.stdout) {
 			try {
-				let xml = err.stdout;
+				let xml = err.stdout.toString();
 				// If the output was truncated, ensure the root element is closed
 				if (!xml.includes("</nmaprun>")) {
 					xml += "</nmaprun>";
 				}
-				return await parseStringPromise(err.stdout);
+				return await parseStringPromise(xml);
 			} catch {
 				return { nmaprun: {} };
 			}

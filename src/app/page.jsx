@@ -3,7 +3,6 @@
 import { useMemo, useState, useCallback } from "react";
 import useSWR from "swr";
 
-// robust fetcher: parse JSON when available, otherwise show server text
 const fetcher = async (key) => {
 	const res = await fetch(key);
 	const ct = res.headers.get("content-type") || "";
@@ -12,7 +11,6 @@ const fetcher = async (key) => {
 
 	if (ct.includes("application/json")) return JSON.parse(text);
 	if (ct.includes("xml")) {
-		// Browser-side: get an XMLDocument
 		return new window.DOMParser().parseFromString(text, "application/xml");
 	}
 	return text; // fallback
@@ -39,7 +37,6 @@ export default function Page() {
 		{
 			revalidateOnFocus: false,
 			dedupingInterval: 1000,
-			// function form avoids touching isValidating and lets us toggle
 			refreshInterval: () => (autoRefresh ? intervalMs : 0),
 			keepPreviousData: true,
 		},
