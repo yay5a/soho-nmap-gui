@@ -26,9 +26,14 @@ async function runNmap(args, timeoutMs = 120_000) {
 		// stdout instead of treating this as a fatal error.
 		if (err?.killed && err?.stdout) {
 			try {
+				let xml = err.stdout;
+				// If the output was truncated, ensure the root element is closed
+				if (!xml.includes("</nmaprun>")) {
+					xml += "</nmaprun>";
+				}
 				return await parseStringPromise(err.stdout);
 			} catch {
-				// fall through to throw original error below
+				return { nmaprun: {} };
 			}
 		}
 		throw err;
