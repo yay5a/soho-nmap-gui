@@ -3,131 +3,284 @@
 import useSWR from "swr";
 import { useMemo, useState } from "react";
 
-const fetcher = (url) => fetch(url).then((r) => r.json());
+// Fetcher that treats 409 (scan in-flight) as "no update" instead of error
+const fetcher = async (url) => {
+	const r = await fetch(url, { cache: "no-store" });
+	if (r.status === 409) return null; // another scan is running
+	if (!r.ok) throw new Error(await r.text().catch(() => "Request failed"));
+	return r.json();
+};
 
-export default function Home() {
+export default function Page() {
+	// UI state
 	const [target, setTarget] = useState("192.168.4.0/22");
-	const [profile] = useState("stealth"); // locked to stealth by default
-	const [auto, setAuto] = useState(true);
+	const [profile] = useState("stealth"); // single profile for now
+	const [autoRefresh, setAutoRefresh] = useState(true);
 
+	const intervalMs = 120_000; // >= typical /22 time
+
+	// Build querystring once per relevant change
 	const qs = useMemo(() => {
 		const p = new URLSearchParams({ target, profile });
 		return p.toString();
 	}, [target, profile]);
 
-	const { data, isLoading, error } = useSWR(`/api/scan?${qs}`, fetcher, {
-		refreshInterval: auto ? 45000 : 0,
-		revalidateOnFocus: false,
-	});
+	// SWR handles refresh and dedup; pause while validating
+	const { data, error, isValidating, mutate } = useSWR(
+		`/api/scan?${qs}`,
+		fetcher,
+		{
+			revalidateOnFocus: false,
+			dedupingInterval: 1000,
+			refreshInterval: autoRefresh && !isValidating ? intervalMs : 0,
+		},
+	);
 
-	const hosts = data?.hosts || [];
+	const results = data || null;
+	const hosts = results?.hosts ?? [];
+	const durationSec = results?.duration
+		? (results.duration / 1000).toFixed(1)
+		: null;
 
-	function exportJson() {
-		const blob = new Blob([JSON.stringify(hosts, null, 2)], {
+	const upCount = hosts.filter((h) => h.status === "up").length;
+
+	async function runNow() {
+		if (isValidating) return; // don't overlap
+		await mutate(); // trigger refresh
+	}
+
+	function exportJSON() {
+		const payload = {
+			generatedAt: new Date().toISOString(),
+			target,
+			profile,
+			durationMs: results?.duration ?? 0,
+			hosts,
+		};
+		const blob = new Blob([JSON.stringify(payload, null, 2)], {
 			type: "application/json",
 		});
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement("a");
 		a.href = url;
-		a.download = "scan-results.json";
+		a.download = `nmap-scan-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
 		a.click();
 		URL.revokeObjectURL(url);
 	}
+
 	return (
-		<main style={{ padding: 24, fontFamily: "ui-sans-serif, system-ui" }}>
-			<h1 style={{ fontSize: 28, marginBottom: 12 }}>
-				SOHO Nmap Monitor (Stealth)
-			</h1>
+		<main className="min-h-screen bg-black text-neutral-100">
+			<div className="mx-auto max-w-6xl px-6 py-8">
+				{/* Header */}
+				<div className="mb-6 flex items-center justify-between">
+					<div>
+						<h1 className="text-2xl font-semibold tracking-tight">
+							SOHO Nmap Monitor{" "}
+							<span className="text-neutral-400">(Stealth)</span>
+						</h1>
+						<p className="mt-1 text-sm text-neutral-400">
+							Target{" "}
+							<span className="font-mono text-neutral-200">{target}</span>
+							{durationSec && (
+								<>
+									{" · "}Scan duration{" "}
+									<span className="font-mono text-neutral-200">
+										{durationSec}s
+									</span>
+								</>
+							)}
+						</p>
+					</div>
 
-			<form
-				onSubmit={(e) => e.preventDefault()}
-				style={{
-					display: "grid",
-					gap: 8,
-					gridTemplateColumns: "1fr auto auto",
-					alignItems: "end",
-					marginBottom: 16,
-				}}
-			>
-				<label>
-					Target
-					<input
-						value={target}
-						onChange={(e) => setTarget(e.target.value)}
-						placeholder="192.168.4.0/22"
-					/>
-				</label>
-				<label>
-					<input
-						type="checkbox"
-						checked={auto}
-						onChange={(e) => setAuto(e.target.checked)}
-					/>{" "}
-					Auto‑refresh (45s)
-				</label>
-				<button type="submit">Run</button>
-			</form>
-
-			{isLoading && (
-				<div style={{ marginBottom: 12 }}>
-					<p>Scanning…</p>
-					<progress />
+					<div className="flex items-center gap-2">
+						<span
+							className={[
+								"inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs",
+								isValidating
+									? "bg-amber-500/10 text-amber-300"
+									: "bg-emerald-500/10 text-emerald-300",
+							].join(" ")}
+						>
+							<span
+								className={[
+									"h-2 w-2 rounded-full",
+									isValidating
+										? "bg-amber-400 animate-pulse"
+										: "bg-emerald-400",
+								].join(" ")}
+							/>
+							{isValidating ? "Scanning…" : "Idle"}
+						</span>
+					</div>
 				</div>
-			)}
-			{error && (
-				<p style={{ color: "crimson" }}>
-					Error: {error.message || "API error"}
-				</p>
-			)}
 
-			{data && (
-				<div style={{ marginBottom: 12 }}>
-					<p>Scan duration: {(data.duration / 1000).toFixed(1)}s</p>
-					<button onClick={exportJson} disabled={hosts.length === 0}>
-						Export JSON
-					</button>
-				</div>
-			)}
+				{/* Controls */}
+				<div className="mb-6 rounded-xl border border-neutral-800 bg-neutral-900/40 p-4">
+					<form
+						onSubmit={(e) => {
+							e.preventDefault();
+							runNow();
+						}}
+						className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5"
+					>
+						<label className="col-span-2 flex flex-col gap-1">
+							<span className="text-xs uppercase tracking-wide text-neutral-400">
+								Target (CIDR)
+							</span>
+							<input
+								className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 font-mono text-sm text-neutral-100 outline-none ring-0 focus:border-neutral-500"
+								value={target}
+								onChange={(e) => setTarget(e.target.value)}
+								placeholder="192.168.1.0/24"
+								spellCheck="false"
+							/>
+						</label>
 
-			<table
-				border="1"
-				cellPadding="6"
-				style={{ borderCollapse: "collapse", width: "100%" }}
-			>
-				<thead>
-					<tr>
-						<th>Host</th>
-						<th>Status</th>
-						<th>Open Ports</th>
-						<th>Services</th>
-					</tr>
-				</thead>
-				<tbody>
-					{hosts.map((h) => (
-						<tr key={h.addr}>
-							<td>{h.addr}</td>
-							<td>
-								<span
-									style={{
-										color: h.status === "up" ? "green" : "red",
-									}}
-								>
-									● {h.status}
+						<label className="flex flex-col gap-1">
+							<span className="text-xs uppercase tracking-wide text-neutral-400">
+								Profile
+							</span>
+							<input
+								className="w-full cursor-not-allowed rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-400"
+								value={profile}
+								readOnly
+							/>
+						</label>
+
+						<div className="flex items-end gap-3">
+							<label className="inline-flex select-none items-center gap-2">
+								<input
+									type="checkbox"
+									className="h-4 w-4 accent-emerald-500"
+									checked={autoRefresh}
+									onChange={(e) => setAutoRefresh(e.target.checked)}
+								/>
+								<span className="text-sm text-neutral-300">
+									Auto-refresh ({Math.round(intervalMs / 1000)}s)
 								</span>
-							</td>
-							<td>{h.ports.map((p) => p.portid).join(", ") || "—"}</td>
-							<td>
-								{h.ports
-									.map(
-										(p) =>
-											`${p.service || "?"}${p.version ? ` ${p.version}` : ""}`,
-									)
-									.join(" | ") || "—"}
-							</td>
-						</tr>
-					))}
-				</tbody>
-			</table>
+							</label>
+
+							<button
+								type="submit"
+								disabled={isValidating}
+								className={[
+									"rounded-lg px-3 py-2 text-sm font-medium transition",
+									isValidating
+										? "cursor-not-allowed bg-neutral-800 text-neutral-400"
+										: "bg-emerald-600 text-white hover:bg-emerald-500",
+								].join(" ")}
+							>
+								{isValidating ? "Scanning…" : "Run"}
+							</button>
+
+							<button
+								type="button"
+								onClick={exportJSON}
+								className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:border-neutral-500 hover:bg-neutral-800"
+							>
+								Export JSON
+							</button>
+						</div>
+					</form>
+				</div>
+
+				{/* Summary */}
+				<div className="mb-3 flex flex-wrap items-center gap-3 text-sm text-neutral-400">
+					<span className="inline-flex items-center gap-2">
+						<span className="h-2 w-2 rounded-full bg-emerald-500" />
+						{upCount} up
+					</span>
+					<span>•</span>
+					<span>{hosts.length} total hosts</span>
+					{error && (
+						<>
+							<span>•</span>
+							<span className="text-rose-300">
+								Error: {String(error.message).slice(0, 160)}
+							</span>
+						</>
+					)}
+				</div>
+
+				{/* Results table */}
+				<div className="overflow-hidden rounded-xl border border-neutral-800">
+					<div className="overflow-x-auto">
+						<table className="min-w-full border-collapse text-sm">
+							<thead className="bg-neutral-900/70 text-neutral-300 backdrop-blur">
+								<tr className="border-b border-neutral-800">
+									<th className="px-4 py-3 text-left font-semibold">Host</th>
+									<th className="px-4 py-3 text-left font-semibold">Status</th>
+									<th className="px-4 py-3 text-left font-semibold">
+										Open Ports
+									</th>
+									<th className="px-4 py-3 text-left font-semibold">
+										Services
+									</th>
+								</tr>
+							</thead>
+							<tbody className="divide-y divide-neutral-900">
+								{hosts.length === 0 && (
+									<tr>
+										<td
+											colSpan={4}
+											className="px-4 py-10 text-center text-neutral-500"
+										>
+											{isValidating
+												? "Scanning…"
+												: "No results yet. Click “Run” to start."}
+										</td>
+									</tr>
+								)}
+								{hosts.map((h) => {
+									const openPorts = (h.ports || []).filter(
+										(p) => p.state === "open",
+									);
+									const portList =
+										openPorts.length > 0
+											? openPorts.map((p) => p.portid).join(", ")
+											: "—";
+									const services =
+										openPorts.length > 0
+											? openPorts
+													.map((p) => p.service || "")
+													.filter(Boolean)
+													.join(" | ") || "—"
+											: "—";
+
+									return (
+										<tr key={h.addr} className="hover:bg-neutral-900/40">
+											<td className="whitespace-nowrap px-4 py-3 font-mono text-neutral-100">
+												{h.addr}
+											</td>
+											<td className="px-4 py-3">
+												{h.status === "up"
+													? <span className="inline-flex items-center gap-2 text-emerald-400">
+															<span className="h-2 w-2 rounded-full bg-emerald-400" />
+															up
+														</span>
+													: <span className="inline-flex items-center gap-2 text-neutral-500">
+															<span className="h-2 w-2 rounded-full bg-neutral-500" />
+															down
+														</span>}
+											</td>
+											<td className="px-4 py-3 font-mono text-neutral-200">
+												{portList}
+											</td>
+											<td className="px-4 py-3 text-neutral-300">{services}</td>
+										</tr>
+									);
+								})}
+							</tbody>
+						</table>
+					</div>
+				</div>
+
+				{/* Footer hint */}
+				<p className="mt-4 text-xs text-neutral-500">
+					Tip: set auto-refresh ≥ typical scan time for your target (e.g., 120s
+					for a /22 with top ports).
+				</p>
+			</div>
 		</main>
 	);
 }

@@ -20,6 +20,8 @@ const Query = z.object({
 	profile: z.enum(["stealth", "fast", "deep"]).default("stealth"),
 });
 
+let scanInFlight = false;
+
 async function runNmap(args, timeoutMs = 120_000) {
 	const { stdout } = await execFileAsync("nmap", args, {
 		timeout: timeoutMs,
@@ -27,6 +29,21 @@ async function runNmap(args, timeoutMs = 120_000) {
 	});
 	return parseStringPromise(stdout);
 }
+
+function estimateHostCount(cidr) {
+	const m = /^(\d{1,3}\.){3}\d{1,3}\/(\d{1,2})$/.exec(cidr);
+	if (!m) return 256; // default budget if not CIDR
+	const mask = Number(m[2]);
+	return Math.max(1, 2 ** (32 - mask));
+}
+
+const estimatedHostCount = estimateHostCount(q.target);
+
+// Discovery timeout: ~0.3s/host, floor 3m, cap 10m
+const discoveryTimeoutMs = Math.min(
+	600_000,
+	Math.max(180_000, estimatedHostCount * 300),
+);
 
 function parseHostsFromXml(xml) {
 	return (xml?.nmaprun?.host || []).map((h) => {
@@ -48,70 +65,40 @@ function parseHostsFromXml(xml) {
 }
 
 export async function GET(req) {
-	const startTime = Date.now();
-	const { searchParams } = new URL(req.url);
-	const q = Query.parse(Object.fromEntries(searchParams));
-	const profile = scanProfiles[q.profile] ?? scanProfiles.stealth;
-
-	console.log("Scan requested", { target: q.target, profile: q.profile });
-
-	if (!isRfc1918(q.target)) {
+	if (scanInFlight) {
 		return Response.json(
-			{ error: "Target must be RFC1918 (home LAN)." },
-			{ status: 400 },
+			{ error: "Scan already in progress.." },
+			{ status: 400, headers: { "Cache-Control": "no-store" } },
 		);
 	}
+	scanInFlight = true;
+	const startTime = Date.now();
+	try {
+		const { searchParams } = new URL(req.url);
+		const q = Query.parse(Object.fromEntries(searchParams));
+		const profile = scanProfiles[q.profile] ?? scanProfiles.stealth;
+		console.log("Scan requested", { target: q.target, profile: q.profile });
+		if (!isRfc1918(q.target)) {
+			return Response.json(
+				{ error: "Target must be RFC1918 (home LAN)." },
+				{ status: 400 },
+			);
+		}
+		// Fast discovery: no DNS lookups
+		const targetCidr = q.target;
+		const discoveryArgs = ["-oX", "-", "-sn", "-T3", "-n", targetCidr];
 
-	function estimateHostCount(cidr) {
-		const m = /^(\d{1,3}\.){3}\d{1,3}\/(\d{1,2})$/.exec(cidr);
-		if (!m) return 256; // default budget if not CIDR
-		const mask = Number(m[2]);
-		return Math.max(1, 2 ** (32 - mask));
-	}
+		const discoveryXml = await runNmap(discoveryArgs, discoveryTimeoutMs);
+		const discoveryHosts = parseHostsFromXml(discoveryXml);
+		const upHosts = discoveryHosts
+			.filter((h) => h.status === "up")
+			.map((h) => h.addr);
 
-	const estimatedHostCount = estimateHostCount(q.target);
-
-	// Discovery timeout: ~0.3s/host, floor 3m, cap 10m
-	const discoveryTimeoutMs = Math.min(
-		600_000,
-		Math.max(180_000, estimatedHostCount * 300),
-	);
-
-	// Fast discovery: no DNS lookups
-	const targetCidr = q.target;
-	const discoveryArgs = ["-oX", "-", "-sn", "-T3", "-n", targetCidr];
-
-	const discoveryXml = await runNmap(discoveryArgs, discoveryTimeoutMs);
-	const discoveryHosts = parseHostsFromXml(discoveryXml);
-	const upHosts = discoveryHosts
-		.filter((h) => h.status === "up")
-		.map((h) => h.addr);
-
-	console.log(
-		`Discovery found ${discoveryHosts.length} hosts (${upHosts.length} up)`,
-	);
-
-	let portHosts = [];
-	if (upHosts.length > 0) {
-		// Port-scan timeout: ~1.2s/host, floor 3m, cap 15m
-		const portTimeoutMs = Math.min(
-			900_000,
-			Math.max(180_000, upHosts.length * 1200),
+		console.log(
+			`Discovery found ${discoveryHosts.length} hosts (${upHosts.length} up)`,
 		);
 
-		// Skip DNS here too; don't use per-host --host-timeout
-		const portArgs = [
-			"-oX",
-			"-",
-			"-n",
-			...profile.ports, // e.g. ["-sS","-F","-T2"]
-			"--max-retries",
-			"1",
-			...upHosts,
-		];
-
-		console.log(`Running port scan on ${upHosts.length} hosts`);
-		let portsXml;
+		let portHosts = [];
 		try {
 			portsXml = await runNmap(portArgs, portTimeoutMs);
 		} catch (err) {
@@ -119,32 +106,32 @@ export async function GET(req) {
 			const needsRoot =
 				/root privileges|failed to open raw socket|are you root/i.test(msg);
 			if (!needsRoot) throw err;
-			// swap -sS -> -sT (no-root TCP connect) and retry
 			const fallbackArgs = portArgs.map((a) => (a === "-sS" ? "-sT" : a));
 			console.warn("Raw-socket scan failed; retrying with -sT");
 			portsXml = await runNmap(fallbackArgs, portTimeoutMs);
 		}
-
 		portHosts = parseHostsFromXml(portsXml).map((h) => ({
 			...h,
 			ports: h.ports.filter((p) => p.state === "open"),
 		}));
+
+		const portMap = new Map(portHosts.map((h) => [h.addr, h]));
+		const mergedHosts = discoveryHosts.map((h) => ({
+			...h,
+			ports: portMap.get(h.addr)?.ports || [],
+		}));
+
+		const duration = Date.now() - startTime;
+		console.log("Scan finished", {
+			durationMs: duration,
+			totalHosts: mergedHosts.length,
+		});
+
+		return Response.json(
+			{ hosts: mergedHosts, duration },
+			{ headers: { "Cache-control": "no-store" } },
+		);
+	} finally {
+		scanInFlight = false;
 	}
-
-	const portMap = new Map(portHosts.map((h) => [h.addr, h]));
-	const mergedHosts = discoveryHosts.map((h) => ({
-		...h,
-		ports: portMap.get(h.addr)?.ports || [],
-	}));
-
-	const duration = Date.now() - startTime;
-	console.log("Scan finished", {
-		durationMs: duration,
-		totalHosts: mergedHosts.length,
-	});
-
-	return Response.json(
-		{ hosts: mergedHosts, duration },
-		{ headers: { "Cache-control": "no-store" } },
-	);
 }
