@@ -74,14 +74,12 @@ function parseHostsFromXml(xml) {
 async function loadProfiles() {
 	const root = process.cwd();
 	const candidates = [
-		path.join(root, "scan-profile.js"),
-		path.join(root, "scan-profile"),
-		path.join(root, "src", "scan-profile.js"),
-		path.join(root, "src", "scan-profile"),
+		path.join(process.cwd(), "scan-profile.js"),
+		path.join(process.cwd(), "src", "scan-profile.js"),
 	];
-	for (const p of candidates) {
+	for (const file of candidates) {
 		try {
-			const mod = await import(pathToFileURL(p).href);
+			const mod = await import(pathToFileURL(file).href);
 			const profiles = mod?.default ?? mod?.scanProfiles ?? mod;
 			if (profiles && typeof profiles === "object") return profiles;
 		} catch {
