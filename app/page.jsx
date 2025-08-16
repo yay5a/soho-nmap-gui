@@ -1,6 +1,10 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
+import ScanForm from "@/components/ScanForm";
+import ResultsTable from "@/components/ResultsTable";
+import ExportMenu from "@/components/ExportMenu";
+import StatusBar from "@/components/StatusBar";
 import useSWR from "swr";
 
 const fetcher = async (key) => {
@@ -17,16 +21,77 @@ const fetcher = async (key) => {
 };
 
 export default function Page() {
+	const [session, setSession] = useState(null);
+	const [history, setHistory] = useState([]);
+	// hydrate history from local storage
+	useEffect(() => {
+		try {
+			const raw = localStorage.getItem("mmvp_history");
+			if (raw) setHistory(JSON.parse(raw));
+		} catch (error) {
+			console.log("There was an error getting local history", error);
+		}
+	}, []);
+
+	useEffect(() => {
+		try {
+			localStorage.setItem("mmvp_historyv", JSON.stringify(history));
+		} catch (error) {
+			console.log(
+				"This error is the second useEffect block for localStorage... what is happening??",
+				error,
+			);
+		}
+	}, [history]);
+
+	const onStart = useCallback(async (params) => {
+		setSession({ state: "queued", params, progress: 0, results: [] });
+		const res = await fetch("/api/scan", {
+			method: "POST",
+			body: JSON.stringify(params),
+		});
+		const reader = res.body.getReader();
+		const dec = new TextDecoder();
+		let acc = "";
+
+		while (true) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			acc += dec.decode(value, { stream: true });
+			const chunks = acc.split("\n\n");
+			acc = chunks.pop();
+			for (const c of chunks) {
+				if (!c.trim()) continue;
+				const msg = JSON.parse(c);
+				if (msg.type === "progress")
+					setSession((s) => ({ ...s, state: "running", progress: msg.value }));
+				if (msg.type === "chunk")
+					setSession((s) => ({ ...s, results: [...s.results, ...msg.rows] }));
+			}
+		}
+		setSession((s) => ({ ...s, state: "done", progress: 100 }));
+		setHistory((h) =>
+			[
+				{
+					id: crypto.randomUUID(),
+					at: Date.now(),
+					...params,
+					count: session?.results?.length || 0,
+				},
+				...h,
+			].slice(0, 10),
+		);
+	}, []);
+
 	// UI state
 	const [target, setTarget] = useState("192.168.4.0/22");
-	const [profile, setProfile] = useState("stealth");
 	const [autoRefresh, setAutoRefresh] = useState(true);
 	const [intervalMs, setIntervalMs] = useState(120_000);
 
 	// query string and SWR key MUST be defined BEFORE useSWR
 	const qs = useMemo(
-		() => new URLSearchParams({ target, profile }).toString(),
-		[target, profile],
+		() => new URLSearchParams({ target }).toString(),
+		[target],
 	);
 	const key = `/api/scan?${qs}`;
 
@@ -69,6 +134,11 @@ export default function Page() {
 		a.click();
 		URL.revokeObjectURL(url);
 	}
+
+	const canExport = useMemo(
+		() => (session?.results?.length ?? 0) > 0,
+		[session],
+	);
 
 	return (
 		<>
@@ -133,17 +203,6 @@ export default function Page() {
 								onChange={(e) => setTarget(e.target.value)}
 								placeholder="192.168.1.0/24"
 								spellCheck="false"
-							/>
-						</label>
-
-						<label className="flex flex-col gap-1">
-							<span className="text-xs uppercase tracking-wide text-neutral-400">
-								Profile
-							</span>
-							<input
-								className="w-full cursor-not-allowed rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-400"
-								value={profile}
-								readOnly
 							/>
 						</label>
 
@@ -216,6 +275,32 @@ export default function Page() {
 						</>
 					)}
 				</div>
+
+				<ScanForm onStart={onStart} disabled={session?.state === "running"} />
+
+				<div className="flex items-center gap-3">
+					<h2 className="text-lg font-semibold">Results</h2>
+					<div className="ml-auto flex items-center gap-2">
+						<StatusBar session={session} />
+						<ExportMenu rows={session?.results ?? []} disabled={!canExport} />
+					</div>
+				</div>
+
+				<ResultsTable rows={session?.results ?? []} />
+
+				<section className="pt-4">
+					<h3 className="text-sm font-medium text-zinc-300">Recent Sessions</h3>
+					<ul className="mt-2 grid gap-2">
+						{history.map((h) => (
+							<li key={h.id} className="text-xs text-zinc-400 flex gap-2">
+								<span className="w-36">{new Date(h.at).toLocaleString()}</span>
+								<span className="font-mono">{h.target}</span>
+								<span className="opacity-70">{h.profile}</span>
+								<span className="ml-auto">{h.count ?? 0} hosts</span>
+							</li>
+						))}
+					</ul>
+				</section>
 
 				{/* Results table */}
 				<div className="overflow-hidden rounded-xl border border-neutral-800">
