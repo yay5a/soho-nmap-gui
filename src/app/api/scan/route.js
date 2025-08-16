@@ -12,11 +12,27 @@ import { parseStringPromise } from "xml2js";
 const execFileAsync = promisify(execFile);
 
 async function runNmap(args, timeoutMs = 120_000) {
-	const { stdout } = await execFileAsync("nmap", args, {
-		timeout: timeoutMs,
-		maxBuffer: 10 * 1024 * 1024,
-	});
-	return parseStringPromise(stdout);
+	try {
+		const { stdout } = await execFileAsync("nmap", args, {
+			timeout: timeoutMs,
+			maxBuffer: 10 * 1024 * 1024,
+			killSignal: "SIGINT",
+		});
+		return parseStringPromise(stdout);
+	} catch (err) {
+		// When the timeout is reached, execFile() terminates the process with the
+		// configured signal (SIGINT above). Nmap handles SIGINT by writing any
+		// results gathered so far before exiting, so attempt to parse the partial
+		// stdout instead of treating this as a fatal error.
+		if (err?.killed && err?.stdout) {
+			try {
+				return await parseStringPromise(err.stdout);
+			} catch {
+				// fall through to throw original error below
+			}
+		}
+		throw err;
+	}
 }
 
 const MAX_HOSTS = parseInt(process.env.MAX_HOSTS || "4096", 10); // keep requests small in a single HTTP call
