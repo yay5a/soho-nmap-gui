@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { execFile } from "node:child_process";
@@ -72,23 +73,28 @@ function parseHostsFromXml(xml) {
 }
 
 async function loadProfiles() {
-	const root = process.cwd();
 	const candidates = [
 		path.join(process.cwd(), "scan-profile.js"),
 		path.join(process.cwd(), "src", "scan-profile.js"),
 	];
-	for (const file of candidates) {
-		try {
-			const mod = await import(pathToFileURL(file).href);
-			const profiles = mod?.default ?? mod?.scanProfiles ?? mod;
-			if (profiles && typeof profiles === "object") return profiles;
-		} catch {
-			// try next
-		}
+
+	const file = candidates.find((p) => fs.existsSync(p));
+	if (!file) {
+		throw new Error(
+			"scan-profile module not found; put scan-profile.js next to your app/ folder and export either default or { scanProfiles }",
+		);
 	}
-	throw new Error(
-		"scan-profile module not found; put scan-profile.js next to your app/ folder and export either default or { scanProfiles }",
-	);
+
+	const fileUrl = pathToFileURL(file).href;
+	const mod = await import(/* webpackIgnore: true */ fileUrl);
+
+	const profiles = mod?.default ?? mod?.scanProfiles;
+	if (!profiles || typeof profiles !== "object") {
+		throw new Error(
+			"scan-profile.js must export default or { scanProfiles } object",
+		);
+	}
+	return profiles;
 }
 
 let scanInFlight = false;
