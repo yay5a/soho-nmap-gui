@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import HostCard from "./HostCard";
 
 export default function ResultsTable({ rows }) {
 	const [q, setQ] = useState("");
@@ -10,49 +11,20 @@ export default function ResultsTable({ rows }) {
 		);
 		return x;
 	}, [rows, q]);
-
+	const list = filtered.length ? filtered : rows;
 	return (
-		<div className="grid gap-2">
+		<div className="grid gap-3">
 			<input
 				value={q}
 				onChange={(e) => setQ(e.target.value)}
 				placeholder="Filter by IP/host/OS"
 				className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 w-full"
 			/>
-
-			<div className="overflow-auto rounded-xl border border-zinc-800">
-				<table className="min-w-full text-sm">
-					<thead className="bg-zinc-900/60">
-						<tr className="text-left">
-							<Th>IP</Th>
-							<Th>Hostname</Th>
-							<Th>State</Th>
-							<Th>Open Ports</Th>
-							<Th>Services</Th>
-							<Th>OS (guess)</Th>
-						</tr>
-					</thead>
-					<tbody>
-						{(filtered.length ? filtered : rows).map((r, i) => (
-							<tr key={i} className="border-t border-zinc-800/80">
-								<Td className="font-mono">{r.ip}</Td>
-								<Td>{r.host}</Td>
-								<Td>{r.state}</Td>
-								<Td className="font-mono">{r.ports.join(", ")}</Td>
-								<Td>{r.services.join(", ")}</Td>
-								<Td>{r.os ?? "—"}</Td>
-							</tr>
-						))}
-					</tbody>
-				</table>
+			<div className="grid gap-2">
+				{list.map((r, i) => (
+					<HostCard key={i} host={r} />
+				))}
 			</div>
 		</div>
 	);
-}
-
-function Th({ children }) {
-	return <th className="px-3 py-2 font-semibold text-zinc-300">{children}</th>;
-}
-function Td({ children, className = "" }) {
-	return <td className={`px-3 py-2 ${className}`}>{children}</td>;
 }

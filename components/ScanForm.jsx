@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ChevronDown, Play } from "lucide-react";
 import { PROFILES, SPEEDS } from "@/lib/fakeData";
+import ToggleSwitch from "./ToggleSwitch";
 
 export default function ScanForm({ onStart, disabled }) {
 	const [target, setTarget] = useState("192.168.1.0/24");
@@ -67,29 +68,17 @@ export default function ScanForm({ onStart, disabled }) {
 					</select>
 				</label>
 				<label className="items-center gap-2 inline-flex">
-					<input
-						type="checkbox"
-						checked={osDetect}
-						onChange={(e) => setOsDetect(e.target.checked)}
-					/>{" "}
+					<ToggleSwitch checked={osDetect} onChange={setOsDetect} />
 					OS detect (-O)
 				</label>
 				<label className="items-center gap-2 inline-flex">
-					<input
-						type="checkbox"
-						checked={serviceDetect}
-						onChange={(e) => setServiceDetect(e.target.checked)}
-					/>{" "}
+					<ToggleSwitch checked={serviceDetect} onChange={setServiceDetect} />
 					Service detect (-sV)
 				</label>
 				<label className="items-center gap-2 inline-flex">
-					<input
-						type="checkbox"
-						checked={skipPing}
-						onChange={(e) => setSkipPing(e.target.checked)}
-					/>{" "}
+					<ToggleSwitch checked={skipPing} onChange={setSkipPing} />
 					Skip ping (-Pn)
-				</label>
+				</label>{" "}
 			</div>
 
 			<div className="flex items-center gap-2 pt-1">

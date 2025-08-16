@@ -5,6 +5,8 @@ import ScanForm from "@/components/ScanForm";
 import ResultsTable from "@/components/ResultsTable";
 import ExportMenu from "@/components/ExportMenu";
 import StatusBar from "@/components/StatusBar";
+import ToggleSwitch from "@/components/ToggleSwitch";
+import RefreshTimer from "@/components/RefreshTimer";
 import useSWR from "swr";
 
 const fetcher = async (key) => {
@@ -116,25 +118,6 @@ export default function Page() {
 	const upCount = hosts.filter((h) => h.status === "up").length;
 
 	const runNow = useCallback(() => mutate(), [mutate]);
-	function exportJSON() {
-		const payload = {
-			generatedAt: new Date().toISOString(),
-			target,
-			profile,
-			durationMs: results?.duration ?? 0,
-			hosts,
-		};
-		const blob = new Blob([JSON.stringify(payload, null, 2)], {
-			type: "application/json",
-		});
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-		a.href = url;
-		a.download = `nmap-scan-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
-		a.click();
-		URL.revokeObjectURL(url);
-	}
-
 	const canExport = useMemo(
 		() => (session?.results?.length ?? 0) > 0,
 		[session],
@@ -222,17 +205,13 @@ export default function Page() {
 						</label>
 
 						<div className="flex items-end gap-3">
-							<label className="inline-flex select-none items-center gap-2">
-								<input
-									type="checkbox"
-									className="h-4 w-4 accent-emerald-500"
-									checked={autoRefresh}
-									onChange={(e) => setAutoRefresh(e.target.checked)}
-								/>
+							<div className="inline-flex select-none items-center gap-2">
+								<ToggleSwitch checked={autoRefresh} onChange={setAutoRefresh} />
 								<span className="text-sm text-neutral-300">
 									Auto-refresh ({Math.round(intervalMs / 1000)}s)
 								</span>
-							</label>
+								<RefreshTimer enabled={autoRefresh} intervalMs={intervalMs} />
+							</div>
 
 							<button
 								type="submit"
@@ -245,14 +224,6 @@ export default function Page() {
 								].join(" ")}
 							>
 								{isValidating ? "Scanning…" : "Run"}
-							</button>
-
-							<button
-								type="button"
-								onClick={exportJSON}
-								className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 hover:border-neutral-500 hover:bg-neutral-800"
-							>
-								Export JSON
 							</button>
 						</div>
 					</form>
@@ -286,6 +257,7 @@ export default function Page() {
 					</div>
 				</div>
 
+				{/* Results table */}
 				<ResultsTable rows={session?.results ?? []} />
 
 				<section className="pt-4">
@@ -301,81 +273,6 @@ export default function Page() {
 						))}
 					</ul>
 				</section>
-
-				{/* Results table */}
-				<div className="overflow-hidden rounded-xl border border-neutral-800">
-					<div className="overflow-x-auto">
-						<table className="min-w-full border-collapse text-sm">
-							<thead className="bg-neutral-900/70 text-neutral-300 backdrop-blur">
-								<tr className="border-b border-neutral-800">
-									<th className="px-4 py-3 text-left font-semibold">Host</th>
-									<th className="px-4 py-3 text-left font-semibold">Status</th>
-									<th className="px-4 py-3 text-left font-semibold">
-										Open Ports
-									</th>
-									<th className="px-4 py-3 text-left font-semibold">
-										Services
-									</th>
-								</tr>
-							</thead>
-							<tbody className="divide-y divide-neutral-900">
-								{hosts.length === 0 && (
-									<tr>
-										<td
-											colSpan={4}
-											className="px-4 py-10 text-center text-neutral-500"
-										>
-											{isValidating
-												? "Scanning…"
-												: "No results yet. Click “Run” to start."}
-										</td>
-									</tr>
-								)}
-								{hosts.map((h) => {
-									const openPorts = (h.ports || []).filter(
-										(p) => p.state === "open",
-									);
-									const portList =
-										openPorts.length > 0
-											? openPorts.map((p) => p.portid).join(", ")
-											: "—";
-									const services =
-										openPorts.length > 0
-											? openPorts
-													.map((p) => p.service || "")
-													.filter(Boolean)
-													.join(" | ") || "—"
-											: "—";
-
-									return (
-										<tr key={h.addr} className="hover:bg-neutral-900/40">
-											<td className="whitespace-nowrap px-4 py-3 font-mono text-neutral-100">
-												{h.addr}
-											</td>
-											<td className="px-4 py-3">
-												{h.status === "up" ? (
-													<span className="inline-flex items-center gap-2 text-emerald-400">
-														<span className="h-2 w-2 rounded-full bg-emerald-400" />
-														up
-													</span>
-												) : (
-													<span className="inline-flex items-center gap-2 text-neutral-500">
-														<span className="h-2 w-2 rounded-full bg-neutral-500" />
-														down
-													</span>
-												)}
-											</td>
-											<td className="px-4 py-3 font-mono text-neutral-200">
-												{portList}
-											</td>
-											<td className="px-4 py-3 text-neutral-300">{services}</td>
-										</tr>
-									);
-								})}
-							</tbody>
-						</table>
-					</div>
-				</div>
 
 				{/* Footer hint */}
 				<p className="mt-4 text-xs text-neutral-500">
