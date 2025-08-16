@@ -1,4 +1,4 @@
-export const scanProfiles = {
+const scanProfiles = {
 	stealth: {
 		discovery: ["-sn", "-T2"],
 		ports: ["-sS", "-F", "-T2", "--max-retries", "1", "--scan-delay", "50ms"],
@@ -15,3 +15,4 @@ export const scanProfiles = {
 		label: "Deep (1-1024 TCP)",
 	},
 };
+export default scanProfiles;

@@ -1,54 +1,59 @@
 "use client";
 
+import { useMemo, useState, useCallback } from "react";
 import useSWR from "swr";
-import { useMemo, useState } from "react";
 
-// Fetcher that treats 409 (scan in-flight) as "no update" instead of error
+// robust fetcher: parse JSON when available, otherwise show server text
 const fetcher = async (url) => {
-	const r = await fetch(url, { cache: "no-store" });
-	if (r.status === 409) return null; // another scan is running
-	if (!r.ok) throw new Error(await r.text().catch(() => "Request failed"));
-	return r.json();
+	const res = await fetch(url, { headers: { "cache-control": "no-store" } });
+	const text = await res.text();
+	let data = null;
+	try {
+		data = JSON.parse(text);
+	} catch {
+		// non-JSON (e.g. Next error HTML) — surface the raw text
+		throw new Error(text || res.statusText);
+	}
+	if (!res.ok) throw new Error(data?.error || data?.detail || res.statusText);
+	return data;
 };
 
 export default function Page() {
 	// UI state
 	const [target, setTarget] = useState("192.168.4.0/22");
-	const [profile] = useState("stealth"); // single profile for now
+	const [profile, setProfile] = useState("stealth");
 	const [autoRefresh, setAutoRefresh] = useState(true);
+	const [intervalMs, setIntervalMs] = useState(120_000);
 
-	const intervalMs = 120_000; // >= typical /22 time
+	// query string and SWR key MUST be defined BEFORE useSWR
+	const qs = useMemo(
+		() => new URLSearchParams({ target, profile }).toString(),
+		[target, profile],
+	);
+	const key = `/api/scan?${qs}`;
 
-	// Build querystring once per relevant change
-	const qs = useMemo(() => {
-		const p = new URLSearchParams({ target, profile });
-		return p.toString();
-	}, [target, profile]);
-
-	// SWR handles refresh and dedup; pause while validating
-	const { data, error, isValidating, mutate } = useSWR(
-		`/api/scan?${qs}`,
+	// SWR: do NOT reference isValidating in the options object
+	const { data, error, isLoading, isValidating, mutate } = useSWR(
+		key,
 		fetcher,
 		{
 			revalidateOnFocus: false,
 			dedupingInterval: 1000,
-			refreshInterval: autoRefresh && !isValidating ? intervalMs : 0,
+			// function form avoids touching isValidating and lets us toggle
+			refreshInterval: () => (autoRefresh ? intervalMs : 0),
+			keepPreviousData: true,
 		},
 	);
-
 	const results = data || null;
 	const hosts = results?.hosts ?? [];
 	const durationSec = results?.duration
 		? (results.duration / 1000).toFixed(1)
 		: null;
+	const busy = isLoading || isValidating;
 
 	const upCount = hosts.filter((h) => h.status === "up").length;
 
-	async function runNow() {
-		if (isValidating) return; // don't overlap
-		await mutate(); // trigger refresh
-	}
-
+	const runNow = useCallback(() => mutate(), [mutate]);
 	function exportJSON() {
 		const payload = {
 			generatedAt: new Date().toISOString(),
@@ -69,7 +74,7 @@ export default function Page() {
 	}
 
 	return (
-		<main className="min-h-screen bg-black text-neutral-100">
+		<>
 			<div className="mx-auto max-w-6xl px-6 py-8">
 				{/* Header */}
 				<div className="mb-6 flex items-center justify-between">
@@ -96,7 +101,7 @@ export default function Page() {
 						<span
 							className={[
 								"inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs",
-								isValidating
+								busy
 									? "bg-amber-500/10 text-amber-300"
 									: "bg-emerald-500/10 text-emerald-300",
 							].join(" ")}
@@ -104,12 +109,10 @@ export default function Page() {
 							<span
 								className={[
 									"h-2 w-2 rounded-full",
-									isValidating
-										? "bg-amber-400 animate-pulse"
-										: "bg-emerald-400",
+									busy ? "bg-amber-400 animate-pulse" : "bg-emerald-400",
 								].join(" ")}
 							/>
-							{isValidating ? "Scanning…" : "Idle"}
+							{busy ? "Scanning…" : "Idle"}
 						</span>
 					</div>
 				</div>
@@ -145,6 +148,21 @@ export default function Page() {
 								value={profile}
 								readOnly
 							/>
+						</label>
+
+						<label className="inline-flex items-center gap-2">
+							<span className="text-sm text-neutral-300">Every</span>
+							<input
+								type="number"
+								min={30}
+								step={15}
+								value={Math.round(intervalMs / 1000)}
+								onChange={(e) =>
+									setIntervalMs(Math.max(30, Number(e.target.value)) * 1000)
+								}
+								className="w-20 rounded-lg border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm text-neutral-100"
+							/>
+							<span className="text-sm text-neutral-300">s</span>
 						</label>
 
 						<div className="flex items-end gap-3">
@@ -253,15 +271,17 @@ export default function Page() {
 												{h.addr}
 											</td>
 											<td className="px-4 py-3">
-												{h.status === "up"
-													? <span className="inline-flex items-center gap-2 text-emerald-400">
-															<span className="h-2 w-2 rounded-full bg-emerald-400" />
-															up
-														</span>
-													: <span className="inline-flex items-center gap-2 text-neutral-500">
-															<span className="h-2 w-2 rounded-full bg-neutral-500" />
-															down
-														</span>}
+												{h.status === "up" ? (
+													<span className="inline-flex items-center gap-2 text-emerald-400">
+														<span className="h-2 w-2 rounded-full bg-emerald-400" />
+														up
+													</span>
+												) : (
+													<span className="inline-flex items-center gap-2 text-neutral-500">
+														<span className="h-2 w-2 rounded-full bg-neutral-500" />
+														down
+													</span>
+												)}
 											</td>
 											<td className="px-4 py-3 font-mono text-neutral-200">
 												{portList}
@@ -281,6 +301,6 @@ export default function Page() {
 					for a /22 with top ports).
 				</p>
 			</div>
-		</main>
+		</>
 	);
 }
